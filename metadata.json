@@ -1,0 +1,6 @@
+{
+  "name": "Room",
+  "description": "Полноценный современный сайт случайного общения.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
