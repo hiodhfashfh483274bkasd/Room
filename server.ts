@@ -272,8 +272,7 @@ bot.hears(/^краш\s+(\d+)$/i, async (ctx) => {
     
     let msg;
     try {
-        // Ипользуем URL всегда, чтобы избежать бага с отправкой как документ и ускорить отправку
-        let rocketSource = { url: 'https://media.tenor.com/2mC1qI3VwF8AAAAC/rocket-space.gif' };
+        let rocketSource = fs.existsSync('rocket.gif') ? { source: 'rocket.gif' } : { url: 'https://media.giphy.com/media/l41lZxzroU33typuU/giphy.gif' };
         
         msg = await ctx.replyWithAnimation(rocketSource, {
             caption: `Коэффициент: 1.00x`,
