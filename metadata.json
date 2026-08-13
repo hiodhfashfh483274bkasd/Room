@@ -1,6 +1,6 @@
 {
-  "name": "Room",
-  "description": "Полноценный современный сайт случайного общения.",
-  "requestFramePermissions": ["microphone"],
+  "name": "Crash Telegram Bot",
+  "description": "A Telegram bot that runs the Crash game natively in groups.",
+  "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
