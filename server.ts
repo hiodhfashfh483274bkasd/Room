@@ -1,37 +1,56 @@
+import { initializeApp } from 'firebase/app';
+import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { Telegraf, Markup } from 'telegraf';
 import fs from 'fs';
 
-// Database setup
-const DB_FILE = 'database.json';
-let db: { users: Record<string, { balance: number, lastBonus: number }> } = { users: {} };
+// Firebase DB setup
+const configStr = fs.readFileSync('firebase-applet-config.json', 'utf-8');
+const firebaseConfig = JSON.parse(configStr);
+const firebaseApp = initializeApp(firebaseConfig);
+const firestore = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
-if (fs.existsSync(DB_FILE)) {
-    try {
-        db = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
-    } catch (e) {
-        console.error('Error loading db', e);
-    }
-}
-
-function saveDb() {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db));
-}
-
-function getUser(id: number) {
+async function getUser(id: number, retries = 3): Promise<{balance: number, lastBonus: number}> {
     const idStr = id.toString();
-    if (!db.users[idStr]) {
-        db.users[idStr] = { balance: 0, lastBonus: 0 };
-        saveDb();
+    const docRef = doc(firestore, 'users', idStr);
+    try {
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+            return docSnap.data() as { balance: number, lastBonus: number };
+        } else {
+            const newUser = { balance: 0, lastBonus: 0 };
+            await setDoc(docRef, newUser);
+            return newUser;
+        }
+    } catch (e: any) {
+        if (retries > 0) {
+            await new Promise(r => setTimeout(r, 1000));
+            return getUser(id, retries - 1);
+        }
+        throw e;
     }
-    return db.users[idStr];
 }
 
-const bot = new Telegraf('8936333009:AAG3aLkX_DQx21Bs_plmucmsvl81REbU_3k');
+async function saveUser(id: number, userData: { balance: number, lastBonus: number }, retries = 3): Promise<void> {
+    const idStr = id.toString();
+    const docRef = doc(firestore, 'users', idStr);
+    try {
+        await setDoc(docRef, userData);
+    } catch (e: any) {
+        if (retries > 0) {
+            await new Promise(r => setTimeout(r, 1000));
+            return saveUser(id, userData, retries - 1);
+        }
+        throw e;
+    }
+}
+
+const bot = new Telegraf('8496440044:AAEd9wOt-hXvYfSw5OKlmPWqfnq-HMZ0rf4');
 
 // Game state
+const fileIdCache: Record<string, string> = {};
 const activeGames: Record<string, {
     userId: number;
     bet: number;
@@ -44,6 +63,26 @@ const activeGames: Record<string, {
     pauseVisualsUntil?: number;
     isTextFallback?: boolean;
 }> = {};
+
+
+bot.command('upload_gifs', async (ctx) => {
+    try {
+        await ctx.reply("Загружаю polet.gif...");
+        const m1 = await ctx.replyWithAnimation({ source: 'polet.gif' });
+        await ctx.reply("polet.gif ID: " + m1.animation.file_id);
+        
+        await ctx.reply("Загружаю win.gif...");
+        const m2 = await ctx.replyWithAnimation({ source: 'win.gif' });
+        await ctx.reply("win.gif ID: " + m2.animation.file_id);
+        
+        await ctx.reply("Загружаю lose.gif...");
+        const m3 = await ctx.replyWithAnimation({ source: 'lose.gif' });
+        await ctx.reply("lose.gif ID: " + m3.animation.file_id);
+    } catch (e) {
+        await ctx.reply("Ошибка: " + e.message);
+    }
+});
+
 
 bot.start((ctx) => {
     if (ctx.chat.type === 'private') {
@@ -67,7 +106,7 @@ bot.command('admin', (ctx) => {
     ctx.reply(
         'Админ панель',
         Markup.inlineKeyboard([
-            Markup.button.callback('Выдать себе 100000 CRASH', 'admin_add_balance')
+            Markup.button.callback('Выдать себе 9999999999 CRASH', 'admin_add_balance')
         ])
     );
 });
@@ -77,14 +116,14 @@ bot.action('admin_add_balance', async (ctx) => {
         return ctx.answerCbQuery('Отказано в доступе', { show_alert: true });
     }
     
-    const user = getUser(ctx.from.id);
-    user.balance += 100000;
-    saveDb();
+    const user = await getUser(ctx.from.id);
+    user.balance += 9999999999;
+    await saveUser(ctx.from.id, user);
     
     try { await ctx.answerCbQuery('Успешно'); } catch (e) {}
-    await ctx.editMessageText(`Админ панель\nВаш баланс: ${user.balance} CRASH`, 
+    await ctx.editMessageText(`Админ панель\nВаш банк: ${user.balance} CRASH`, 
         Markup.inlineKeyboard([
-            Markup.button.callback('Выдать себе 100000 CRASH', 'admin_add_balance')
+            Markup.button.callback('Выдать себе 9999999999 CRASH', 'admin_add_balance')
         ])
     ).catch(() => {});
 });
@@ -94,18 +133,18 @@ bot.use((ctx, next) => {
     if (ctx.chat && (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup')) {
         return next();
     } else {
-        if (ctx.message && (ctx.message as any).text && ((ctx.message as any).text.startsWith('краш') || (ctx.message as any).text.toLowerCase() === 'б')) {
-            ctx.reply('❌ Этот бот работает только в групповых чатах.');
+        if (ctx.message && (ctx.message as any).text && ((ctx.message as any).text.startsWith('краш') || (ctx.message as any).text.toLowerCase() === 'банк' || (ctx.message as any).text.toLowerCase().startsWith('дать'))) {
+            ctx.reply('Этот бот работает только в групповых чатах');
         }
     }
 });
 
-bot.hears(/^б$/i, (ctx) => {
-    const user = getUser(ctx.from.id);
+bot.hears(/^банк$/i, async (ctx) => {
+    const user = await getUser(ctx.from.id);
     const now = Date.now();
     const canClaimBonus = now - user.lastBonus >= 24 * 60 * 60 * 1000;
     
-    let text = `Ваш баланс: ${user.balance} CRASH`;
+    let text = `Ваш банк: ${user.balance} CRASH`;
     let markup = undefined;
     
     if (canClaimBonus) {
@@ -118,31 +157,31 @@ bot.hears(/^б$/i, (ctx) => {
 });
 
 bot.action('claim_bonus', async (ctx) => {
-    const user = getUser(ctx.from.id);
+    const user = await getUser(ctx.from.id);
     const now = Date.now();
     
     if (now - user.lastBonus >= 24 * 60 * 60 * 1000) {
         user.balance += 3000;
         user.lastBonus = now;
-        saveDb();
+        await saveUser(ctx.from.id, user);
         
-        ctx.editMessageText(`Бонус успешно получен, ваш новый баланс: ${user.balance} CRASH`).catch(() => {});
+        ctx.editMessageText(`Бонус успешно получен, ваш новый банк: ${user.balance} CRASH`).catch(() => {});
         try { await ctx.answerCbQuery('Вы получили 3000 CRASH бонуса!'); } catch (e) {}
     } else {
         try { await ctx.answerCbQuery('Бонус пока недоступен.', { show_alert: true }); } catch (e) {}
-        ctx.editMessageText(`Ваш баланс: ${user.balance} CRASH`).catch(() => {});
+        ctx.editMessageText(`Ваш банк: ${user.balance} CRASH`).catch(() => {});
     }
 });
 
-bot.hears(/^п\s+(\d+)$/i, (ctx) => {
+bot.hears(/^дать\s+(\d+)$/i, async (ctx) => {
     const message = ctx.message;
     if (!message || !('reply_to_message' in message) || !message.reply_to_message) {
-        return ctx.reply('⚠️ Команда работает только в ответ на сообщение игрока, которому вы хотите перевести средства.');
+        return ctx.reply('Команда работает только в ответ на сообщение игрока, которому вы хотите дать средства');
     }
     
     const amount = parseInt(ctx.match[1], 10);
     if (isNaN(amount) || amount <= 0) {
-        return ctx.reply('⚠️ Сумма перевода должна быть больше нуля.');
+        return ctx.reply('Сумма перевода должна быть больше нуля');
     }
     
     const senderId = ctx.from.id;
@@ -153,25 +192,26 @@ bot.hears(/^п\s+(\d+)$/i, (ctx) => {
     const receiverId = receiver.id;
     
     if (senderId === receiverId) {
-        return ctx.reply('Вы не можете перевести средства самому себе');
+        return ctx.reply('Вы не можете дать средства самому себе');
     }
     
     // Bots usually shouldn't receive funds (unless intended), but let's allow it or just ignore if it's the bot itself
     if (receiver.is_bot) {
-        return ctx.reply('Вы не можете перевести средства боту');
+        return ctx.reply('Вы не можете дать средства боту');
     }
     
-    const senderUser = getUser(senderId);
+    const senderUser = await getUser(senderId);
     
     if (senderUser.balance < amount) {
-        return ctx.reply('❌ Недостаточно средств для перевода.');
+        return ctx.reply('Недостаточно средств для перевода');
     }
     
-    const receiverUser = getUser(receiverId);
+    const receiverUser = await getUser(receiverId);
     
     senderUser.balance -= amount;
     receiverUser.balance += amount;
-    saveDb();
+    await saveUser(senderId, senderUser);
+    await saveUser(receiverId, receiverUser);
     
     const senderName = ctx.from.first_name || 'Игрок';
     const receiverName = receiver.first_name || 'Игрок';
@@ -206,17 +246,17 @@ bot.hears(/^краш\s+(\d+)$/i, async (ctx) => {
     const betStr = ctx.match[1];
     const bet = parseInt(betStr, 10);
     if (isNaN(bet) || bet <= 0) {
-        return ctx.reply('⚠️ Ставка должна быть больше нуля.');
+        return ctx.reply('Ставка должна быть больше нуля');
     }
     
-    const user = getUser(ctx.from.id);
+    const user = await getUser(ctx.from.id);
     if (user.balance < bet) {
-        return ctx.reply('❌ Недостаточно средств на балансе.');
+        return ctx.reply('Недостаточно средств на балансе');
     }
     
     // Deduct bet
     user.balance -= bet;
-    saveDb();
+    await saveUser(ctx.from.id, user);
     
     // Calculate crash point
     let crashPoint = 1.00;
@@ -248,9 +288,10 @@ bot.hears(/^краш\s+(\d+)$/i, async (ctx) => {
     crashPoint = Math.floor((crashPoint + 0.001) / 0.2) * 0.2;
     crashPoint = Math.round(crashPoint * 100) / 100;
     
-    // Если меньше 1.20, то это моментальный краш на 1.00
-    if (crashPoint < 1.20) {
-        crashPoint = 1.00;
+    // Переносим краши 1.20 на 1.40, чтобы не было "обидного" краша, 
+    // и чтобы 1.00 не выпадал слишком часто.
+    if (crashPoint === 1.20) {
+        crashPoint = 1.40;
     }
     
     // Жесткий лимит на 10x
@@ -275,7 +316,7 @@ bot.hears(/^краш\s+(\d+)$/i, async (ctx) => {
     
     let msg;
     try {
-        let rocketSource = fs.existsSync('rocket.gif') ? { source: 'rocket.gif' } : { url: 'https://media.giphy.com/media/l41lZxzroU33typuU/giphy.gif' };
+        let rocketSource = fileIdCache['polet'] || (fs.existsSync('polet.gif') ? { source: 'polet.gif' } : { url: 'https://media.giphy.com/media/l41lZxzroU33typuU/giphy.gif' });
         
         msg = await ctx.replyWithAnimation(rocketSource, {
             caption: `Коэффициент: 1.00x`,
@@ -283,18 +324,31 @@ bot.hears(/^краш\s+(\d+)$/i, async (ctx) => {
                 Markup.button.callback('Забрать', `take_${gameId}`)
             ])
         });
-    } catch (err) {
-        console.error("Error sending animation, falling back to text", err);
+        
+        fs.appendFileSync('msg_dump.log', JSON.stringify(msg, null, 2) + "\n"); const fileId = msg.animation?.file_id || msg.document?.file_id;
+        if (!fileIdCache['polet'] && fileId) {
+            fileIdCache['polet'] = fileId;
+        }
+    } catch (err: any) {
+        let retryAfter = 0;
+        if (err.response && err.response.error_code === 429) {
+            retryAfter = err.response.parameters?.retry_after || 2;
+        } else {
+            console.error("Error sending animation", err.message || err); fs.appendFileSync('bot_errors.log', new Date().toISOString() + " - " + (err.message || err) + "\n");
+        }
         game.isTextFallback = true;
         try {
-            msg = await ctx.reply(`🚀 Полет начался!\nКоэффициент: 1.00x`, Markup.inlineKeyboard([
+            if (retryAfter > 0) {
+                await new Promise(resolve => setTimeout(resolve, Math.min(retryAfter, 5) * 1000));
+            }
+            msg = await ctx.reply(`Коэффициент: 1.00x`, Markup.inlineKeyboard([
                 Markup.button.callback('Забрать', `take_${gameId}`)
             ]));
-        } catch (e) {
+        } catch (e: any) {
             user.balance += bet;
-            saveDb();
+            await saveUser(ctx.from.id, user);
             delete activeGames[gameId];
-            return ctx.reply('⚠️ Ошибка запуска игры. Убедитесь, что у бота есть права.');
+            return ctx.reply('Ошибка запуска игры').catch(() => {});
         }
     }
     
@@ -323,13 +377,30 @@ bot.hears(/^краш\s+(\d+)$/i, async (ctx) => {
             clearInterval(interval);
             // Leave game in memory for a few seconds so late clicks get a clear alert
             setTimeout(() => { delete activeGames[gameId]; }, 10000);
-            await safeEditMessage(game.chatId, game.messageId, `💥 Краш на ${multiplier.toFixed(2)}x\nВы проиграли`, undefined, game.isTextFallback);
+            try {
+                await bot.telegram.deleteMessage(game.chatId, game.messageId!);
+            } catch (e) {}
+            
+            try {
+                let loseSource = fileIdCache['lose'] || (fs.existsSync('lose.gif') ? { source: 'lose.gif' } : { url: 'https://media.giphy.com/media/l41lZxzroU33typuU/giphy.gif' });
+                if (game.isTextFallback) {
+                    await bot.telegram.sendMessage(game.chatId, `Краш на ${multiplier.toFixed(2)}x\nВы проиграли`);
+                } else {
+                    const loseMsg = await bot.telegram.sendAnimation(game.chatId, loseSource, { caption: `Краш на ${multiplier.toFixed(2)}x\nВы проиграли` });
+                    const loseFileId = loseMsg.animation?.file_id || loseMsg.document?.file_id;
+                    if (!fileIdCache['lose'] && loseFileId) {
+                        fileIdCache['lose'] = loseFileId;
+                    }
+                }
+            } catch (e) {
+                await bot.telegram.sendMessage(game.chatId, `Краш на ${multiplier.toFixed(2)}x\nВы проиграли`).catch(() => {});
+            }
         } else {
             const now = Date.now();
             if (!game.pauseVisualsUntil || now >= game.pauseVisualsUntil) {
                 try {
                     if (game.isTextFallback) {
-                        await bot.telegram.editMessageText(game.chatId, game.messageId, undefined, `🚀 Полет продолжается!\nКоэффициент: ${multiplier.toFixed(2)}x`, 
+                        await bot.telegram.editMessageText(game.chatId, game.messageId, undefined, `Коэффициент: ${multiplier.toFixed(2)}x`, 
                             Markup.inlineKeyboard([
                                 Markup.button.callback('Забрать', `take_${gameId}`)
                             ])
@@ -369,7 +440,7 @@ bot.action(/take_(.+)/, async (ctx) => {
     }
     
     if (game.status === 'crashed') {
-        try { await ctx.answerCbQuery('💥 Ракета уже взорвалась! Вы не успели.', { show_alert: true }); } catch (e) {}
+        try { await ctx.answerCbQuery('Ракета уже взорвалась! Вы не успели', { show_alert: true }); } catch (e) {}
         return;
     }
     
@@ -382,9 +453,9 @@ bot.action(/take_(.+)/, async (ctx) => {
     game.status = 'won';
     const winAmount = Math.floor(game.bet * game.currentMultiplier);
     
-    const user = getUser(game.userId);
+    const user = await getUser(game.userId);
     user.balance += winAmount;
-    saveDb();
+    await saveUser(game.userId, user);
     
     try { await ctx.answerCbQuery(`Вы забрали ${winAmount} CRASH!`); } catch (e) {}
     
@@ -393,7 +464,26 @@ bot.action(/take_(.+)/, async (ctx) => {
     }
     delete activeGames[gameId];
 
-    await safeEditMessage(game.chatId, game.messageId, `✅ Вы забрали выигрыш!\n\nКоэффициент: ${game.currentMultiplier.toFixed(2)}x\nВыигрыш: ${winAmount} CRASH`, undefined, game.isTextFallback);
+    try {
+        await bot.telegram.deleteMessage(game.chatId, game.messageId!);
+    } catch (e) {}
+
+    try {
+        let winSource = fileIdCache['win'] || (fs.existsSync('win.gif') ? { source: 'win.gif' } : { url: 'https://media.giphy.com/media/l41lZxzroU33typuU/giphy.gif' });
+        if (game.isTextFallback) {
+            await bot.telegram.sendMessage(game.chatId, `Вы забрали выигрыш!\n\nКоэффициент: ${game.currentMultiplier.toFixed(2)}x\nВыигрыш: ${winAmount} CRASH`);
+        } else {
+            const winMsg = await bot.telegram.sendAnimation(game.chatId, winSource, {
+                caption: `Вы забрали выигрыш!\n\nКоэффициент: ${game.currentMultiplier.toFixed(2)}x\nВыигрыш: ${winAmount} CRASH`
+            });
+            const winFileId = winMsg.animation?.file_id || winMsg.document?.file_id;
+            if (!fileIdCache['win'] && winFileId) {
+                fileIdCache['win'] = winFileId;
+            }
+        }
+    } catch(e) {
+        await bot.telegram.sendMessage(game.chatId, `Вы забрали выигрыш!\n\nКоэффициент: ${game.currentMultiplier.toFixed(2)}x\nВыигрыш: ${winAmount} CRASH`).catch(() => {});
+    }
 });
 
 // Applet / Server code
@@ -402,6 +492,28 @@ async function startServer() {
   const PORT = 3000;
 
   // Simple ping endpoint
+  
+app.get('/api/test-upload', async (req, res) => {
+    try {
+        let errs = [];
+        let source = { source: 'polet.gif' };
+        try {
+            await bot.telegram.sendAnimation('123456789', source);
+        } catch (e) {
+            errs.push(e.message);
+        }
+        res.json({ errors: errs });
+    } catch(e) {
+        res.status(500).json({error: e.message});
+    }
+});
+
+  
+
+  
+
+  
+
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
@@ -421,16 +533,18 @@ async function startServer() {
     });
   }
 
+  
+
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
   
   // Start bot
-  bot.launch({ dropPendingUpdates: true }).then(() => {
-      console.log('Telegram bot is running!');
-  }).catch(err => {
-      console.error('Failed to start telegram bot', err);
-  });
+  // bot.launch({ dropPendingUpdates: true }).then(() => {
+  //     console.log('Telegram bot is running!');
+  // }).catch(err => {
+  //     console.error('Failed to start telegram bot', err);
+  // });
 }
 
 // Enable graceful stop
